@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-palm"
+version = "0.1.0"
+description = "AI PalmPilot - Agent-native memory layer (serverless, in-process)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Sebastian", email = "sebastian@blackbird.inc"}]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+    "onnxruntime>=1.18",
+    "tokenizers>=0.19",
+    "sqlite-vec>=0.1.6",
+    "numpy>=1.24",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.21",
+    "tiktoken>=0.7",
+]
+export = [
+    "sentence-transformers>=2.7",
+]
+
+[project.scripts]
+mempalm = "mempalm:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_palm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

@@ -1,0 +1,26 @@
+[policy]
+# Shared pool (hermes.db) write permissions
+# All agents can READ shared pool
+# Writers can PUBLISH to shared pool
+
+[shared.writers]
+# Agents allowed to publish to shared pool
+sebastian = true
+ling = true
+elite-33 = true
+
+[shared.admins]
+# Agents with admin rights on shared pool (can forget, manage)
+sebastian = true
+
+[shared.namespaces]
+# Per-namespace write permissions (override global writers)
+# "namespace" = ["allowed_agent1", "agent2"]
+projects.broken-kingdom = ["sebastian", "ling"]
+projects.hermeslink = ["sebastian", "elite-33"]
+docs = ["sebastian", "ling", "elite-33"]
+
+[personal]
+# Each agent owns their personal DB
+# No cross-agent writes allowed
+# Read access controlled by file permissions
