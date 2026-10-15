@@ -1,0 +1,24 @@
+[policy]
+# Shared pool (hermes.db) write permissions
+# All agents can READ shared pool
+# Writers can PUBLISH to shared pool
+
+[shared.writers]
+# Agents allowed to publish to shared pool
+# your-agent-1 = true
+# your-agent-2 = true
+
+[shared.admins]
+# Agents with admin rights on shared pool (can forget, manage)
+# your-admin-agent = true
+
+[shared.namespaces]
+# Per-namespace write permissions (override global writers)
+# "namespace" = ["allowed_agent1", "agent2"]
+# projects.your-project = ["your-agent-1", "your-agent-2"]
+# docs = ["your-agent-1", "your-agent-2"]
+
+[personal]
+# Each agent owns their personal DB
+# No cross-agent writes allowed
+# Read access controlled by file permissions

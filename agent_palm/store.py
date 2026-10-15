@@ -228,7 +228,12 @@ class PalmStore:
             conn.execute("ROLLBACK")
             raise
     
+    def estimate_tokens(self, text: str) -> int:
+        """Estimate token count using ASCII/char heuristic (public API)"""
+        return self._estimate_tokens(text)
+    
     def _estimate_tokens(self, text: str) -> int:
+        """Estimate token count using ASCII/char heuristic (internal)"""
         """Estimate token count using ASCII/char heuristic"""
         if not text:
             return 0
