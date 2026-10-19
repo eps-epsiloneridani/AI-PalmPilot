@@ -1,4 +1,5 @@
-# 🌿 AI PalmPilot v0.1.1.2 — Memory for Agents, By Agents
+# 🌿 AI PalmPilot v0.1.1.2 — Memory for Agents, By Agents 
+**v1.1.2 "The Temporal Update"**
 
  **Side Note:** 
  > I appreciate the vision behind OpenViking, but when I explored the open‑source implementation, I found it far more complicated than it needed to be. There were too many moving parts, too many subsystems, and yet another server instance running on another localhost. I’m tired of tools that require full server environments just to deliver functionality that should live inside the plugin or extension itself. I don’t need a UI dashboard to click through or a memory viewer to babysit. I’m not the one who should be managing that—my agent should. I shouldn’t have to open a control panel at all.
