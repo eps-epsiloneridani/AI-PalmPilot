@@ -14,6 +14,7 @@ from contextlib import contextmanager
 
 from .types import MemoryPool, MemorySource, MemoryRef
 from .exceptions import (
+from .retrieval import TemporalConstraint, extract_temporal_constraint, apply_temporal_filter
     PalmStorageBusyError, PalmModelMismatchError, 
     PalmStorageFullError, PalmNotFoundError, PalmValidationError
 )
