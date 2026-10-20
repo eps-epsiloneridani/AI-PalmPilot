@@ -1,14 +1,13 @@
-# 🌿 AI PalmPilot v0.1.1.2 — Memory for Agents, By Agents 
-**v1.1.2 "The Temporal Update"**
+# 🌿 AI PalmPilot v1.2.0 — Memory for Agents, By Agents
 
- **Side Note:** 
- > I appreciate the vision behind OpenViking, but when I explored the open‑source implementation, I found it far more complicated than it needed to be. There were too many moving parts, too many subsystems, and yet another server instance running on another localhost. I’m tired of tools that require full server environments just to deliver functionality that should live inside the plugin or extension itself. I don’t need a UI dashboard to click through or a memory viewer to babysit. I’m not the one who should be managing that—my agent should. I shouldn’t have to open a control panel at all.
+**Side Note:** 
+> I appreciate the vision behind OpenViking, but when I explored the open‑source implementation, I found it far more complicated than it needed to be. There were too many moving parts, too many subsystems, and yet another server instance running on another localhost. I'm tired of tools that require full server environments just to deliver functionality that should live inside the plugin or extension itself. I don't need a UI dashboard to click through or a memory viewer to babysit. I'm not the one who should be managing that—my agent should. I shouldn't have to open a control panel at all.
 
-> That realization pushed me toward a different idea. Instead of building a massive library with a librarian, why not create something closer to a PalmPilot for AI agents? A lightweight, easily accessible companion that gives them a simple place to store and retrieve what matters. Using a small ONNX model—around 23 MB—as the agent’s “memory sidekick,” you end up with a compact notepad that can remind them of ongoing tasks, help them catalog information, and support their workflow without the overhead of a full server stack.
+> That realization pushed me toward a different idea. Instead of building a massive library with a librarian, why not create something closer to a PalmPilot for AI agents? A lightweight, easily accessible companion that gives them a simple place to store and retrieve what matters. Using a small ONNX model—around 23 MB—as the agent's "memory sidekick," you end up with a compact notepad that can remind them of ongoing tasks, help them catalog information, and support their workflow without the overhead of a full server stack.
 
-> This concept wasn’t created in isolation. It came from a collaborative effort across seven commercial models, asking each not only what they recommended but how they would implement it. The answers were surprisingly straightforward. I wanted something built by agents, for agents—something they would actually want to use, not another system we assume they need.
+> This concept wasn't created in isolation. It came from a collaborative effort across seven commercial models, asking each not only what they recommended but how they would implement it. The answers were surprisingly straightforward. I wanted something built by agents, for agents—something they would actually want to use, not another system we assume they need.
 
-A serverless, in-process memory layer for AI agents. No servers, no web UI, no daemons. Just a Python library that gives agents a personal, searchable notebook with tiered context (L0/L1/L2), semantic search, and a self-improving review loop.
+A serverless, in-process memory layer for AI agents. No servers, no web UI, no daemons. Just a Python library that gives agents a personal, searchable notebook with tiered context (L0/L1/L2), semantic search, temporal filtering, actual token accounting, and a self-improving review loop.
 
 ## Features
 
@@ -20,6 +19,37 @@ A serverless, in-process memory layer for AI agents. No servers, no web UI, no d
 - **Local embeddings** — ONNX Runtime + all-MiniLM-L6-v2 int8 (23MB). No llama.cpp, no compilation, no GPU needed.
 - **CLI for humans** — `mempalm stats/prune/export/review/backup/reembed`
 - **Agent integrations** — Hermes MemoryProvider, MCP stdio tools, direct Python API
+
+---
+
+## What's New in v1.2
+
+### 🕐 Temporal Filtering
+Natural language time queries now work out of the box:
+```python
+results = palm.search("decisions from last week", max_tokens=2000)
+results = palm.search("Q3 2024 decisions", max_tokens=2000)
+results = palm.search("what happened yesterday", max_tokens=2000)
+```
+Supports relative ("last week", "next month"), absolute ("2024-01-15", "Q3 2024"), quarters, seasons, and ranges ("between X and Y", "since last Friday").
+
+### 📊 Actual Token Accounting (session_model_usage Reader)
+Replaces heuristic estimation with actual token counts from Hermes' `session_model_usage` table:
+```python
+# Now uses actuals when available, falls back to heuristic
+tokens = palm.estimate_tokens(text, model="gpt-4", session_id="abc123")
+```
+Eliminates estimation drift, enables cost tracking, billing, and quota enforcement.
+
+### 🔒 Forged-ID Isolation Test (Fio's Pattern)
+Verifies MCP isolation model actually enforces boundaries:
+```python
+# Seed Agent B → Spoof from Agent A → Assert isolation
+palm_b = PalmPilot(agent_id="agent_b", use_hash_embed=True)
+palm_a = PalmPilot(agent_id="agent_a", use_hash_embed=True)
+# Agent A cannot access B's memories by spoofing agent_id
+```
+Includes Windows-safe test cleanup and CI-ready test in `tests/test_isolation.py`.
 
 ---
 
@@ -83,13 +113,13 @@ mempalm stats --pool both
               ┌─────────────┼─────────────┐
               ▼             ▼             ▼
          $MEMPALM_PATH/  $MEMPALM_PATH/  $MEMPALM_PATH/
-         agents/         shared.db      models/
+         agents/         hermes.db      models/
          <agent_id>.db   (shared pool)  all-MiniLM-L6-v2_int8.onnx
 ```
 
 **Data Layout:**
 - `$MEMPALM_PATH/agents/<agent_id>.db` — Personal vault per agent (private)
-- `$MEMPALM_PATH/shared.db` — Shared knowledge pool (cross-agent)
+- `$MEMPALM_PATH/hermes.db` — Shared knowledge pool (cross-agent)
 - `$MEMPALM_PATH/models/` — ONNX model + tokenizer (downloaded on first use)
 
 ---
@@ -213,6 +243,9 @@ mempalm review --namespace decisions --unreviewed-only
 
 # Re-embed with new model
 mempalm reembed --model all-MiniLM-L6-v2 --batch-size 500
+
+# MCP Server
+mempalm-mcp
 ```
 
 ---
@@ -434,9 +467,9 @@ agent_palm/
 ├── mcp_tool.py          # MCP stdio server + tools
 ├── mempalm.py           # Click CLI entry point
 ├── pyproject.toml       # Package config, deps, entry points
-├── policy.toml          # Shared pool permissions template
+├── policy.toml          # Shared pool permissions (copy from policy.toml.example)
 ├── tests/
-│   └── test_store.py    # 13 tests: CRUD, search, crash recovery, backup, etc.
+│   └── test_store.py    # Tests: CRUD, search, crash recovery, backup, etc.
 └── README.md            # This file
 ```
 

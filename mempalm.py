@@ -56,7 +56,7 @@ def get_shared_store(use_hash_embed: bool = False) -> tuple:
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="1.2.0")
 @click.option("--root", default=DEFAULT_ROOT, envvar="MEMPALM_PATH", help="Root directory for mempalm data")
 @click.option("--hash-embed", is_flag=True, help="Use hash embedder (for testing, no model needed)")
 @click.pass_context
@@ -127,9 +127,9 @@ def remember(ctx, content: str, namespace: str, pool: str, tags: tuple, type: st
                 click.echo(f"   (near duplicate of: {near_dup})")
         else:
             click.echo(f"✓ Remembered: {uri}")
-            click.echo(f"  L0: {store._estimate_tokens(l0)} tokens")
-            click.echo(f"  L1: {store._estimate_tokens(l1)} tokens")
-            click.echo(f"  L2: {store._estimate_tokens(content)} tokens")
+            click.echo(f"  L0: {store.estimate_tokens(l0)} tokens")
+            click.echo(f"  L1: {store.estimate_tokens(l1)} tokens")
+            click.echo(f"  L2: {store.estimate_tokens(content)} tokens")
         
     except Exception as e:
         click.echo(f"✗ Error: {e}", err=True)
