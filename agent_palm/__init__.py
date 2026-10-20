@@ -15,7 +15,7 @@ from .types import (
 from .store import PalmStore, PalmStorageBusyError, PalmModelMismatchError
 from .embed import OnnxEmbedder, HashEmbedder
 from .extract import heuristic_extract
-from .retrieval import pack_budget, verify_citations, format_context, build_grounded_context
+from .retrieval import pack_budget, verify_citations, format_context, build_grounded_context, extract_temporal_constraint, TemporalConstraint, apply_temporal_filter
 
 __all__ = [
     "MemoryPool",
@@ -38,7 +38,7 @@ __all__ = [
     "PalmPilot",
 ]
 
-__version__ = "0.1.0"
+__version__ = "1.1.2"
 
 
 class PalmPilot:
@@ -161,68 +161,73 @@ class PalmPilot:
         return uri
     
     def search(
-        self,
-        query: str,
-        namespace: str = None,
-        pool: str = "both",
-        level: str = "l1",
-        max_tokens: int = 2000,
-        limit: int = 10,
-        include_superseded: bool = False,
-    ) -> list:
-        """
-        Search memories with hybrid retrieval.
+            self,
+            query: str,
+            namespace: str = None,
+            pool: str = "both",
+            level: str = "l1",
+            max_tokens: int = 2000,
+            limit: int = 10,
+            include_superseded: bool = False,
+        ) -> list:
+            """
+            Search memories with hybrid retrieval and temporal filtering.
+
+            Args:
+                query: Search query
+                namespace: Namespace to search (None = all)
+                pool: "personal", "shared", or "both"
+                level: "l0" or "l1" (L2 requires explicit recall)
+                max_tokens: Token budget for results
+                limit: Maximum results
+                include_superseded: Include superseded memories
+
+            Returns:
+                List of MemoryNode-like dicts
+            """
+            # Embed query
+            query_embedding = self.embedder.embed_single(query)
         
-        Args:
-            query: Search query
-            namespace: Namespace to search (None = all)
-            pool: "personal", "shared", or "both"
-            level: "l0" or "l1" (L2 requires explicit recall)
-            max_tokens: Token budget for results
-            limit: Maximum results
-            include_superseded: Include superseded memories
+            # Extract temporal constraint from query
+            temporal_constraint = extract_temporal_constraint(query)
+        
+            all_results = []
+            pools = ["personal", "shared"] if pool == "both" else [pool]
+        
+            for p in pools:
+                if p == "shared":
+                    if not self.shared_store:
+                        continue
+                    store = self.shared_store
+                else:
+                    store = self.store
             
-        Returns:
-            List of MemoryNode-like dicts
-        """
-        # Embed query
-        query_embedding = self.embedder.embed_single(query)
-        
-        all_results = []
-        pools = ["personal", "shared"] if pool == "both" else [pool]
-        
-        for p in pools:
-            if p == "shared":
-                if not self.shared_store:
-                    continue
-                store = self.shared_store
-            else:
-                store = self.store
-            
-            try:
-                # Vector search
-                vec_results = store.search_vec(query_embedding, pool=p, namespace=namespace, k=50)
+                try:
+                    # Vector search
+                    vec_results = store.search_vec(query_embedding, pool=p, namespace=namespace, k=50)
                 
-                # FTS search
-                fts_results = store.search_fts(query, pool=p, namespace=namespace, k=50)
+                    # FTS search
+                    fts_results = store.search_fts(query, pool=p, namespace=namespace, k=50)
                 
-                # Fuse and fetch
-                results = store.fuse_and_fetch(
-                    vec_results, fts_results,
-                    k=limit, max_tokens=max_tokens,
-                    include_superseded=include_superseded
-                )
+                    # Fuse and fetch with temporal filtering
+                    results = store.fuse_and_fetch(
+                        vec_results, fts_results,
+                        k=limit, max_tokens=max_tokens,
+                        include_superseded=include_superseded,
+                        query_text=query,
+                        temporal_constraint=temporal_constraint
+                    )
                 
-                all_results.extend(results)
+                    all_results.extend(results)
                 
-            except Exception as e:
-                # Log but continue
-                pass
+                except Exception as e:
+                    # Log but continue
+                    pass
         
-        # Sort by score
-        all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+            # Sort by score
+            all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
         
-        return all_results[:limit]
+            return all_results[:limit]
     
     def recall(
         self, 

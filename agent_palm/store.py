@@ -14,10 +14,10 @@ from contextlib import contextmanager
 
 from .types import MemoryPool, MemorySource, MemoryRef
 from .exceptions import (
-from .retrieval import TemporalConstraint, extract_temporal_constraint, apply_temporal_filter
     PalmStorageBusyError, PalmModelMismatchError, 
     PalmStorageFullError, PalmNotFoundError, PalmValidationError
 )
+from .retrieval import TemporalConstraint, extract_temporal_constraint, apply_temporal_filter
 
 
 # SQL statements
@@ -120,10 +120,10 @@ CREATE TABLE IF NOT EXISTS meta (
 
 class PalmStore:
     """SQLite storage engine with FTS5 + sqlite-vec, WAL mode, explicit transactions"""
-    
+
     EXPECTED_MODEL = "all-MiniLM-L6-v2"
     EXPECTED_DIM = 384
-    
+
     def __init__(
         self, 
         db_path: str, 
@@ -134,10 +134,10 @@ class PalmStore:
         self.expected_model = expected_model
         self.expected_dim = expected_dim
         self._conn: Optional[sqlite3.Connection] = None
-        
+
         # Ensure directory exists
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    
+
     def connect(self) -> sqlite3.Connection:
         """Open connection with WAL mode and load sqlite-vec extension"""
         if self._conn is None:
@@ -152,7 +152,7 @@ class PalmStore:
                 conn.autocommit = True
             except AttributeError:
                 pass  # Python < 3.12, isolation_level=None handles it
-            
+
             # Load sqlite-vec extension
             conn.enable_load_extension(True)
             try:
@@ -166,34 +166,34 @@ class PalmStore:
                 raise RuntimeError(f"Failed to load sqlite-vec extension: {e}")
             finally:
                 conn.enable_load_extension(False)
-            
+
             # Configure pragmas
             conn.execute("PRAGMA journal_mode = WAL;")
             conn.execute("PRAGMA synchronous = NORMAL;")
             conn.execute("PRAGMA busy_timeout = 5000;")
             conn.execute("PRAGMA foreign_keys = ON;")
             conn.execute("PRAGMA secure_delete = ON;")
-            
+
             # Initialize schema
             conn.executescript(SCHEMA_SQL)
-            
+
             # Verify virtual tables were created
             vt = conn.execute("SELECT name FROM sqlite_master WHERE type='virtual' AND name LIKE 'memories_%'").fetchall()
             print(f"Virtual tables created: {[v[0] for v in vt]}")
-            
+
             # Verify/initialize model metadata
             self._verify_or_init_meta(conn)
-            
+
             self._conn = conn
-        
+
         return self._conn
-    
+
     def _verify_or_init_meta(self, conn: sqlite3.Connection):
         """Verify embedding model matches or initialize on first run"""
         conn.execute("""
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         """)
-        
+
         row = conn.execute("SELECT value FROM meta WHERE key = 'embed_model'").fetchone()
         if row is None:
             # First run - initialize
@@ -207,13 +207,13 @@ class PalmStore:
                     f"Database vector space is '{current_model}', but runtime configured for "
                     f"'{self.expected_model}'. Run `mempalm reembed` before opening."
                 )
-    
+
     def close(self):
         """Close database connection"""
         if self._conn:
             self._conn.close()
             self._conn = None
-    
+
     @contextmanager
     def transaction(self, immediate: bool = True):
         """Context manager for explicit transactions with BEGIN IMMEDIATE"""
@@ -228,14 +228,19 @@ class PalmStore:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    
-    def estimate_tokens(self, text: str) -> int:
-        """Estimate token count using ASCII/char heuristic (public API)"""
+
+    def estimate_tokens(self, text: str, model: str = None, session_id: str = None) -> int:
+        """Estimate token count using actuals from session_model_usage when available, else heuristic."""
+        # Try to get actuals from Hermes session_model_usage table
+        if model and session_id:
+            actuals = self.get_actual_token_usage(session_id, model)
+            if actuals is not None:
+                return actuals
+        # Fall back to heuristic
         return self._estimate_tokens(text)
-    
+
     def _estimate_tokens(self, text: str) -> int:
         """Estimate token count using ASCII/char heuristic (internal)"""
-        """Estimate token count using ASCII/char heuristic"""
         if not text:
             return 0
         ascii_count = sum(1 for c in text if ord(c) < 128)
@@ -243,11 +248,46 @@ class PalmStore:
         # ASCII ~3.5 chars/token, non-ASCII ~1.2 chars/token, +10% safety margin
         import math
         return math.ceil((ascii_count / 3.5 + non_ascii * 1.2) * 1.1)
-    
+
+    def get_actual_token_usage(self, session_id: str, model: str) -> Optional[int]:
+        """
+        Get actual token usage from Hermes session_model_usage table.
+
+        Returns total tokens (input + output + cached + thoughts) for the most recent
+        entry matching session_id and model, or None if table doesn't exist or no match.
+        """
+        conn = self.connect()
+        try:
+            # Check if session_model_usage table exists
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='session_model_usage'"
+            ).fetchone()
+            if not row:
+                return None
+
+            # Get most recent usage for this session+model
+            # Schema assumed: session_id, model, input_tokens, output_tokens, cached_tokens, thoughts_tokens, timestamp
+            row = conn.execute(
+                """SELECT input_tokens, output_tokens, cached_tokens, thoughts_tokens
+                   FROM session_model_usage
+                   WHERE session_id = ? AND model = ?
+                   ORDER BY timestamp DESC
+                   LIMIT 1""",
+                (session_id, model)
+            ).fetchone()
+
+            if row:
+                input_t, output_t, cached_t, thoughts_t = row
+                return (input_t or 0) + (output_t or 0) + (cached_t or 0) + (thoughts_t or 0)
+            return None
+        except Exception:
+            # Table schema mismatch or other error - fall back to heuristic
+            return None
+
     def _make_uri(self, pool: str, owner: str, namespace: str, type_: str, content_hash: str) -> str:
         """Generate URI: mem://<pool>/<owner>/<namespace>/<type>/<hash_prefix>"""
         return f"mem://{pool}/{owner}/{namespace}/{type_}/{content_hash[:12]}"
-    
+
     def write_memory(
         self,
         *,
@@ -277,22 +317,22 @@ class PalmStore:
         tags_json = json.dumps(list(tags))
         fields_json = json.dumps(fields) if fields else None
         now = time.time()
-        
+
         uri = f"mem://{pool}/{owner}/{namespace}/{content_hash[:12]}"
-        
+
         conn = self.connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
-            
+
             # Check for exact duplicate (same content_hash in same pool/namespace)
             dup_row = conn.execute(
                 "SELECT uri FROM memories WHERE pool = ? AND namespace = ? AND content_hash = ?",
                 (pool, namespace, content_hash)
             ).fetchone()
-            
+
             is_dup = dup_row is not None
             near_dup_uri = dup_row[0] if is_dup else None
-            
+
             if is_dup:
                 # Update existing record instead of inserting duplicate
                 conn.execute(
@@ -316,12 +356,12 @@ class PalmStore:
                 )
                 conn.execute("COMMIT")
                 return near_dup_uri, True, near_dup_uri
-            
+
             # Insert new memory
             seq_val = conn.execute(
                 "SELECT COALESCE(MAX(seq), 0) + 1 FROM memories"
             ).fetchone()[0]
-            
+
             conn.execute(
                 """
                 INSERT INTO memories (
@@ -338,15 +378,15 @@ class PalmStore:
                     time.time(), time.time(), 0, 0.5
                 )
             )
-            
+
             # Get the actual rowid and update URI with proper hash
             node_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             content_hash = hashlib.sha256(b"placeholder").hexdigest()  # Will be fixed
-            
+
             # Actually, let's do this properly with the real data
             conn.execute("ROLLBACK")
             raise NotImplementedError("Need to restructure - see below")
-            
+
         except sqlite3.OperationalError as e:
             conn.execute("ROLLBACK")
             if "busy" in str(e).lower() or "locked" in str(e).lower():
@@ -356,7 +396,7 @@ class PalmStore:
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    
+
     def remember(
         self,
         *,
@@ -377,35 +417,35 @@ class PalmStore:
         """
         # Preprocessing OUTSIDE transaction
         from .extract import heuristic_extract
-        
+
         l0, l1 = heuristic_extract(content)
         l2_raw = content
-        
+
         # Token estimates
         tok_l0 = self._estimate_tokens(l0)
         tok_l1 = self._estimate_tokens(l1)
         tok_l2 = self._estimate_tokens(content)
-        
+
         # Content hash for deduplication
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        
+
         # URI format: mem://<pool>/<owner>/<namespace>/<type>/<hash12>
         uri = f"mem://{pool}/{owner}/{namespace}/{type_}/{content_hash[:12]}"
-        
+
         # Prepare data for transaction
         tags_json = json.dumps(list(tags))
         fields_json = json.dumps(fields) if fields else None
         compressed_l2 = zlib.compress(content.encode("utf-8"), level=6)
         now = time.time()
         expires_at = now + (ttl_days * 86400) if ttl_days else None
-        
+
         with self.transaction(immediate=True) as conn:
             # Check for exact duplicate
             dup_row = conn.execute(
                 "SELECT uri FROM memories WHERE pool = ? AND namespace = ? AND content_hash = ?",
                 (pool, namespace, content_hash)
             ).fetchone()
-            
+
             if dup_row:
                 # Update existing
                 conn.execute(
@@ -423,25 +463,25 @@ class PalmStore:
                         expires_at, dup_row[0]
                     )
                 )
-                
+
                 # Sync FTS
                 conn.execute(
                     "INSERT INTO memories_fts(rowid, l0, l1, l2, tags) VALUES (?, ?, ?, ?, ?)",
                     (conn.execute("SELECT id FROM memories WHERE uri = ?", (dup_row[0],)).fetchone()[0], l0, l1, content, json.dumps(list(tags)))
                 )
-                
+
                 # Transaction committed automatically by context manager
                 return dup_row[0], True, dup_row[0]
-            
+
             # Generate URI
             uri = f"mem://{pool}/{owner}/{namespace}/{type_}/{content_hash[:12]}"
-            
+
             # Insert new memory - 23 data columns (matching table exactly)
             # Schema columns: uri, pool, owner, author, namespace, type, source, tags, fields,
             # l0, l1, l2, tok_l0, tok_l1, tok_l2, content_hash,
             # created_at, updated_at, last_accessed_at, use_count, seq, trust, expires_at
             seq_val = conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM memories").fetchone()[0]
-            
+
             # Explicit 23 values matching the 23 data columns
             values = (
                 uri, pool, owner, "agent", namespace, type_, source,
@@ -452,7 +492,7 @@ class PalmStore:
                 time.time(), time.time(), None, 0, 1, 0.5, expires_at
             )
             assert len(values) == 23, f"Expected 23 values, got {len(values)}"
-            
+
             conn.execute(
                 """
                 INSERT INTO memories (
@@ -463,20 +503,20 @@ class PalmStore:
                 """,
                 values
             )
-            
+
             node_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-            
+
             # Sync FTS (contentless)
             conn.execute(
                 "INSERT INTO memories_fts(rowid, l0, l1, l2, tags) VALUES (?, ?, ?, ?, ?)",
                 (node_id, l0, l1, content, json.dumps(list(tags)))
             )
-            
+
             # Vector will be inserted by caller after embedding
-            
+
             # Transaction committed automatically by context manager
             return uri, False, None
-    
+
     def store_vector(self, node_id: int, embedding: list[float]):
         """Store embedding vector for a memory (called after remember)"""
         import array
@@ -485,7 +525,7 @@ class PalmStore:
         vec_bytes = array.array('f', embedding).tobytes()
         # Use INSERT OR REPLACE to handle duplicate vector entries
         conn.execute("INSERT OR REPLACE INTO memories_vec(id, embedding) VALUES (?, ?)", (node_id, vec_bytes))
-    
+
     def search_fts(self, query: str, pool: str, namespace: Optional[str], k: int = 50) -> List[Tuple[int, float]]:
         """Search FTS5, return (rowid, bm25_score)"""
         conn = self.connect()
@@ -494,7 +534,7 @@ class PalmStore:
         if namespace:
             where.append("m.namespace = ?")
             params.append(namespace)
-        
+
         where_clause = " AND ".join(where)
         sql = f"""
             SELECT m.id, bm25(memories_fts) as score
@@ -508,13 +548,13 @@ class PalmStore:
         if namespace:
             params.append(namespace)
         params.extend([query, k])
-        
+
         return conn.execute(sql, params).fetchall()
-    
+
     def search_vec(self, embedding: list[float], pool: str, namespace: Optional[str], k: int = 50) -> List[Tuple[int, float]]:
         """Search vec0, return (id, distance)"""
         conn = self.connect()
-        
+
         # vec0 doesn't support WHERE clauses directly on the vec table
         # We need to join with memories table
         where = ["m.pool = ?"]
@@ -522,13 +562,13 @@ class PalmStore:
         if namespace:
             where.append("m.namespace = ?")
             params.append(namespace)
-        
+
         where_clause = " AND ".join(where)
-        
+
         # Convert embedding to bytes for vec0
         import array
         vec_bytes = array.array('f', embedding).tobytes()
-        
+
         sql = f"""
             SELECT m.id, vec_distance_l2(memories_vec.embedding, ?) as dist
             FROM memories_vec
@@ -540,27 +580,29 @@ class PalmStore:
         # Parameter order: vec_bytes, pool, [namespace], k
         # The first ? is for vec_distance_l2, then pool/namespace in WHERE, then LIMIT
         final_params = [vec_bytes] + params + [k]
-        
+
         return conn.execute(sql, final_params).fetchall()
-    
+
     def fuse_and_fetch(
         self, 
         vec_results: List[Tuple[int, float]], 
         fts_results: List[Tuple[int, float]], 
         k: int = 20,
         max_tokens: int = 2000,
-        include_superseded: bool = False
+        include_superseded: bool = False,
+        query_text: str = "",
+        temporal_constraint: Optional[TemporalConstraint] = None
     ) -> List[Dict[str, Any]]:
-        """RRF fusion + budget packing"""
+        """RRF fusion + budget packing + optional temporal filtering"""
         from .retrieval import rrf_fuse, pack_budget
-        
+
         # Convert to candidate dicts
         candidates = []
         vec_ranks = {rid: i for i, (rid, _) in enumerate(vec_results)}
         fts_ranks = {rid: i for i, (rid, _) in enumerate(fts_results)}
-        
+
         all_ids = set(vec_ranks.keys()) | set(fts_ranks.keys())
-        
+
         conn = self.connect()
         placeholders = ",".join("?" * len(all_ids))
         rows = conn.execute(
@@ -572,19 +614,19 @@ class PalmStore:
             WHERE id IN ({",".join("?" * len(all_ids))})
             """, list(all_ids)
         ).fetchall()
-        
+
         for row in rows:
             rid = row[0]
             vec_rank = vec_ranks.get(rid)
             fts_rank = fts_ranks.get(rid)
-            
+
             # RRF score
             score = 0.0
             if vec_rank is not None:
                 score += 1.0 / (60 + vec_rank)
             if fts_rank is not None:
                 score += 0.8 / (60 + fts_rank)
-            
+
             candidates.append({
                 "id": row[0],
                 "uri": row[1],
@@ -606,13 +648,17 @@ class PalmStore:
                 "verdict": row[17],
                 "score": score,
             })
-        
+
         # Sort by score desc
         candidates.sort(key=lambda x: x["score"], reverse=True)
-        
+
+        # Apply temporal filter if constraint provided
+        if temporal_constraint is not None and (temporal_constraint.start is not None or temporal_constraint.end is not None):
+            candidates = apply_temporal_filter(candidates, temporal_constraint)
+
         # Pack into budget
         return pack_budget(candidates, max_tokens)
-    
+
     def recall(self, uri: str, level: str = "l1", max_tokens: int = 4000, offset: int = 0):
         """Recall memory at specific level with optional pagination"""
         conn = self.connect()
@@ -623,11 +669,11 @@ class PalmStore:
             FROM memories WHERE uri = ?
             """, (uri,)
         ).fetchone()
-        
+
         if not row:
             from .exceptions import PalmNotFoundError
             raise Exception(f"Memory not found: {uri}")
-        
+
         if level == "l0":
             text = row[8]
             total = row[12]
@@ -650,14 +696,14 @@ class PalmStore:
                 }
         else:
             raise ValueError(f"Invalid level: {level}")
-        
+
         return {
             "text": text,
             "truncated": False,
             "total_tokens": total,
             "offset": offset
         }
-    
+
     def forget(self, uri: str) -> Dict[str, Any]:
         """Hard delete memory and all associated data"""
         with self.transaction() as conn:
@@ -666,28 +712,28 @@ class PalmStore:
             if not row:
                 from .exceptions import PalmNotFoundError
                 raise Exception(f"Memory not found: {uri}")
-            
+
             node_id, pool = row
-            
+
             # Check if shared and find published copies
             published = []
             if pool == "shared":
                 # In single-file design, shared is just pool='shared'
                 pass
-            
+
             # Cascading delete (foreign keys handle annotations, edges, fts, vec)
             conn.execute("DELETE FROM memories WHERE uri = ?", (uri,))
-            
+
             # Transaction committed automatically by context manager
-            
+
             return {"deleted": True, "uri": uri, "published_copies": published}
-    
+
     def get_node_id(self, uri: str) -> Optional[int]:
         """Get internal node ID for a URI"""
         conn = self.connect()
         row = conn.execute("SELECT id FROM memories WHERE uri = ?", (uri,)).fetchone()
         return row[0] if row else None
-    
+
     def get_memory(self, uri: str) -> Optional[Dict]:
         """Get full memory record"""
         conn = self.connect()
@@ -699,10 +745,10 @@ class PalmStore:
             FROM memories WHERE uri = ?
             """, (uri,)
         ).fetchone()
-        
+
         if not row:
             return None
-        
+
         return {
             "id": row[0], "uri": row[1], "pool": row[2], "owner": row[3],
             "author": row[4], "namespace": row[6], "type": row[7],
@@ -713,7 +759,7 @@ class PalmStore:
             "content_hash": row[16], "created_at": row[17], "updated_at": row[18],
             "trust": row[19], "expires_at": row[20],
         }
-    
+
     def namespace_stats(self, pool: str, namespace: Optional[str] = None) -> Dict[str, Any]:
         """Get statistics for a namespace"""
         conn = self.connect()
@@ -722,9 +768,9 @@ class PalmStore:
         if namespace:
             where.append("namespace = ?")
             params.append(namespace)
-        
+
         where_clause = " AND ".join(where)
-        
+
         stats = conn.execute(f"""
             SELECT 
                 COUNT(*) as count,
@@ -734,7 +780,7 @@ class PalmStore:
                 MAX(updated_at) as last_updated
             FROM memories WHERE {" AND ".join(where)}
         """, params).fetchone()
-        
+
         return {
             "count": stats[0] or 0,
             "total_tokens": {
@@ -744,7 +790,7 @@ class PalmStore:
             },
             "last_updated": stats[4],
         }
-    
+
     def backup(self, destination_path: str):
         """Thread/process safe backup using SQLite's online backup API"""
         conn = self.connect()
